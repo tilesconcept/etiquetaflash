@@ -1,8 +1,8 @@
 {
   "name": "etiquetaflash",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Aplicación interna de Tiles Concept para generar etiquetas de envío desde pedidos de Tienda Nube.",
+  "description": "App interna de Tiles Concept: subir PDFs de etiquetas de Tienda Nube y generar los Excel de carga masiva para Correo Argentino y Sinergia.",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -19,11 +19,12 @@
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
+    "exceljs": "^4.4.0",
     "next": "14.2.15",
     "next-auth": "^4.24.10",
-    "pdf-lib": "^1.17.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "unpdf": "^0.12.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

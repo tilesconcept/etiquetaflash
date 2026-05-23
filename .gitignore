@@ -22,3 +22,5 @@ prisma/dev.db-journal
 
 storage/labels/*
 !storage/labels/.gitkeep
+storage/exports/*
+!storage/exports/.gitkeep

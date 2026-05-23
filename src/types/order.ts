@@ -1,78 +1,35 @@
-export interface NormalizedOrder {
-  id: string;                     // id interno (Order.id)
-  tiendaNubeOrderId: string;
+// Datos extraídos de un PDF de Tienda Nube.
+// Lo que el parser no encuentra queda undefined y la UI lo pinta como editable.
+export interface ParsedLabel {
   orderNumber: string;
-  status: string;
-  paymentStatus: string;
-  shippingStatus: string;
-  totalAmount: number;
-  currency: string;
+  packageNumber?: string;
+  date?: string;
+  carrier: 'CORREO_ARGENTINO' | 'SINERGIA' | 'OTRO';
+  shippingMode: 'HOME' | 'PICKUP_BRANCH';
 
-  customer: {
-    firstName: string;
-    lastName: string;
-    fullName: string;
-    email?: string;
-    phone?: string;
-    document?: string; // DNI / CUIT
-  };
+  // Si es PICKUP_BRANCH
+  pickupBranchName?: string;
+  pickupBranchAddress?: string;
+  pickupBranchCode?: string; // si el parser lo pudo inferir
 
-  shipTo: {
-    street?: string;
-    number?: string;
-    floor?: string;
-    city?: string;
-    province?: string;
-    postalCode?: string;
-    country: string;
-  };
+  // Destinatario
+  recipientName?: string;
+  recipientPhone?: string;
+  recipientDni?: string;
+  recipientEmail?: string;
 
-  items: Array<{
-    name: string;
-    sku?: string;
-    quantity: number;
-    unitPrice: number;
-    weightKg?: number;
-  }>;
+  // Dirección de entrega (HOME) — y también copia desde la sucursal para
+  // que las columnas localidad/provincia/CP queden completas.
+  shipStreet?: string;
+  shipNumber?: string;
+  shipFloor?: string;
+  shipApartment?: string;
+  shipLocality?: string;
+  shipProvince?: string;
+  shipPostalCode?: string;
 
-  shippingMethod?: string;
-  labelGenerated: boolean;
-}
+  productsSummary?: string;
+  productsJson?: Array<{ name: string; quantity: number; sku?: string }>;
 
-export interface ShipmentPayload {
-  order: NormalizedOrder;
-  package: {
-    weightKg: number;
-    lengthCm: number;
-    widthCm: number;
-    heightCm: number;
-  };
-  sender: {
-    name: string;
-    street: string;
-    number: string;
-    city: string;
-    province: string;
-    postalCode: string;
-    phone: string;
-    email: string;
-  };
-  service?: 'door_to_door' | 'pickup_point';
-}
-
-export interface ShipmentResult {
-  carrier: 'CORREO_ARGENTINO' | 'SINERGIA' | 'MOCK';
-  trackingNumber: string;
-  externalShipmentId?: string;
-  labelUrl?: string;
-  labelPdfBytes?: Uint8Array;
-  rawRequest: unknown;
-  rawResponse: unknown;
-}
-
-export interface TrackingInfo {
-  trackingNumber: string;
-  status: string;
-  events: Array<{ date: string; description: string; location?: string }>;
-  raw: unknown;
+  rawText: string;
 }

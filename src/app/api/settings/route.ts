@@ -1,45 +1,45 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { z } from 'zod';
-import { Carrier } from '@prisma/client';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { toJsonError } from '@/lib/errors';
+import { getSettings } from '@/services/settingsService';
 
-const Settings = z.object({
-  defaultWeightKg: z.number().positive(),
+const SettingsSchema = z.object({
+  defaultProductType: z.enum(['CP', 'EP', 'UP']),
   defaultLengthCm: z.number().positive(),
   defaultWidthCm: z.number().positive(),
   defaultHeightCm: z.number().positive(),
-  originName: z.string().min(1),
-  originStreet: z.string().min(1),
-  originNumber: z.string().min(1),
-  originCity: z.string().min(1),
-  originProvince: z.string().min(1),
-  originPostalCode: z.string().min(1),
-  originPhone: z.string().min(1),
-  originEmail: z.string().email(),
-  preferredCarrier: z.nativeEnum(Carrier),
+  defaultWeightKg: z.number().positive(),
+  defaultContentValue: z.number().nonnegative(),
+  defaultFlexId: z.string(),
+  originName: z.string(),
+  originStreet: z.string(),
+  originNumber: z.string(),
+  originCity: z.string(),
+  originProvince: z.string(),
+  originPostalCode: z.string(),
+  originPhone: z.string(),
+  originEmail: z.string().email().or(z.literal('')),
 });
 
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const store = await prisma.store.findFirst({ include: { settings: true } });
-  return NextResponse.json({ store });
+  const settings = await getSettings();
+  return NextResponse.json({ settings });
 }
 
 export async function PUT(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   try {
-    const data = Settings.parse(await req.json());
-    const store = await prisma.store.findFirst();
-    if (!store) return NextResponse.json({ error: 'No hay tienda configurada' }, { status: 400 });
-    const settings = await prisma.storeSettings.upsert({
-      where: { storeId: store.id },
+    const data = SettingsSchema.parse(await req.json());
+    const settings = await prisma.settings.upsert({
+      where: { id: 'default' },
       update: data,
-      create: { storeId: store.id, ...data },
+      create: { id: 'default', ...data },
     });
     return NextResponse.json({ settings });
   } catch (err) {

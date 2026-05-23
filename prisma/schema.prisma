@@ -11,7 +11,7 @@ datasource db {
 }
 
 // ---------------------------------------------------------------
-// Usuarios internos de Tiles Concept (operadores que generan etiquetas)
+// Usuarios internos de Tiles Concept
 // ---------------------------------------------------------------
 model User {
   id           String   @id @default(cuid())
@@ -22,7 +22,7 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  apiLogs ApiLog[]
+  exports Export[]
 }
 
 enum UserRole {
@@ -31,34 +31,24 @@ enum UserRole {
 }
 
 // ---------------------------------------------------------------
-// Tienda conectada (un solo Tiles Concept, pero multi-tenant ready)
+// Configuración de la app (single-tenant): paquete default y remitente.
 // ---------------------------------------------------------------
-model Store {
-  id               String   @id @default(cuid())
-  tiendaNubeId     String   @unique
-  name             String
-  // Token cifrado (AES-256-GCM). Ver src/lib/encryption.ts
-  accessTokenEnc   String
-  scope            String?
-  connectedAt      DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  settings  StoreSettings?
-  orders    Order[]
-  shipments Shipment[]
-}
-
-// Configuración (paquete default, dirección origen, operador preferido, etc).
-model StoreSettings {
+model Settings {
   id                    String  @id @default(cuid())
-  storeId               String  @unique
-  store                 Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  // singleton: usamos id="default"
 
-  defaultWeightKg       Float   @default(1.0)
+  // Paquete default
+  defaultProductType    String  @default("CP")    // CP|EP|UP (Correo Argentino)
   defaultLengthCm       Float   @default(20)
   defaultWidthCm        Float   @default(15)
   defaultHeightCm       Float   @default(10)
+  defaultWeightKg       Float   @default(1.0)
+  defaultContentValue   Float   @default(0)       // valor declarado en ARS
 
+  // Sinergia
+  defaultFlexId         String  @default("flex")  // se imprime literal en columna ID FLEX
+
+  // Remitente (no se usa en los Excel de carga masiva, pero queda para etiqueta interna)
   originName            String  @default("Tiles Concept")
   originStreet          String  @default("")
   originNumber          String  @default("")
@@ -68,141 +58,128 @@ model StoreSettings {
   originPhone           String  @default("")
   originEmail           String  @default("")
 
-  preferredCarrier      Carrier @default(CORREO_ARGENTINO)
-
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------
-// Cache de pedidos sincronizados desde Tienda Nube
+// Orden / envío parseado desde un PDF de Tienda Nube.
+// Cada Order corresponde a una línea del Excel de carga masiva.
 // ---------------------------------------------------------------
 model Order {
   id                String   @id @default(cuid())
-  storeId           String
-  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
-  tiendaNubeOrderId String   @unique
-  orderNumber       String
-  status            String   // open / closed / cancelled
-  paymentStatus     String   // paid / pending / refunded
-  shippingStatus    String   // unpacked / packed / shipped / etc.
-  totalAmount       Float
-  currency          String   @default("ARS")
+  // Identificación
+  orderNumber       String                       // ej. "397"
+  packageNumber     String?                      // ej. "1"
+  source            OrderSource @default(PDF_UPLOAD)
+  sourceFileName    String?
+  tiendaNubeOrderId String?                      // si vino por API; null si vino por PDF
+  pdfRawText        String?  @db.Text            // texto crudo del PDF (auditoría)
 
-  // Snapshot del JSON crudo recibido de Nuvemshop (auditoría).
-  raw               Json
+  // Operador detectado (editable por el usuario)
+  carrier           Carrier  @default(CORREO_ARGENTINO)
+  shippingMode      ShippingMode @default(HOME)
 
-  // Campos planos para listar/filtrar sin parsear JSON.
-  customerName      String
-  customerEmail     String?
-  customerPhone     String?
-  customerDocument  String?
+  // Sucursal de retiro (solo si shippingMode = PICKUP_BRANCH)
+  pickupBranchName       String?
+  pickupBranchAddress    String?
+  pickupBranchCode       String?                 // código de 3 letras para CA (ej "RBA"). Si null lo intentamos resolver.
 
-  shipAddress       String?
+  // Destinatario
+  recipientName     String
+  recipientEmail    String?
+  recipientPhone    String?
+  recipientPhoneAreaCode String?                 // separado para CA (cod_area_cel)
+  recipientPhoneNumber   String?                 // separado para CA (cel)
+  recipientDni      String?
+
+  // Dirección de destino (si shippingMode = HOME)
+  shipStreet        String?
   shipNumber        String?
   shipFloor         String?
-  shipCity          String?
-  shipProvince      String?
-  shipPostalCode    String?
-  shipCountry       String   @default("AR")
+  shipApartment     String?
+  shipBetweenStreets String?                     // entrecalles (Sinergia)
+  shipLocality      String?                      // localidad / city
+  shipPartido       String?                      // partido / municipality (Sinergia)
+  shipProvince      String?                      // nombre completo de la provincia
+  shipProvinceCode  String?                      // letra única para CA (B, C, X, etc.)
+  shipPostalCode    String?                      // CP o CPA (1414 o C1414AAA)
 
-  labelGenerated    Boolean  @default(false)
+  // Paquete (override sobre defaults)
+  productType       String?                      // CP|EP|UP override
+  lengthCm          Float?
+  widthCm           Float?
+  heightCm          Float?
+  weightKg          Float?
+  contentValue      Float?
+
+  // Sinergia
+  flexId            String?                      // ID FLEX override
+  shipmentDetail    String?                      // DETALLE DEL ENVIO
+
+  // Productos (resumen + JSON detallado)
+  productsSummary   String?                      // ej. "GIZA · Camel x1"
+  productsJson      Json?
+
+  // Estado
+  exported          Boolean  @default(false)     // ya se incluyó en algún Export
+  lastExportId      String?
+  notes             String?  @db.Text
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
-  tiendaNubeCreatedAt DateTime?
 
-  shipments Shipment[]
+  exportItems       ExportItem[]
 
-  @@index([storeId, shippingStatus])
-  @@index([labelGenerated])
+  @@unique([orderNumber, packageNumber])
+  @@index([carrier, exported])
+  @@index([createdAt])
 }
 
-// ---------------------------------------------------------------
-// Envío generado en un operador logístico
-// ---------------------------------------------------------------
-model Shipment {
-  id                  String   @id @default(cuid())
-  storeId             String
-  store               Store    @relation(fields: [storeId], references: [id])
-  orderId             String
-  order               Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  tiendaNubeOrderId   String
-
-  carrier             Carrier
-  status              ShipmentStatus @default(PENDING)
-  trackingNumber      String?
-  labelUrl            String?         // URL externa (si el carrier la provee)
-  labelPdfPath        String?         // ruta local del PDF descargado
-
-  // Payload completo del request/response al carrier (auditoría).
-  rawRequest          Json?
-  rawResponse         Json?
-  errorMessage        String?
-
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-
-  labels ShippingLabel[]
-
-  @@index([carrier, status])
-  @@index([tiendaNubeOrderId])
+enum OrderSource {
+  PDF_UPLOAD
+  MANUAL
+  TIENDANUBE_API
 }
 
 enum Carrier {
   CORREO_ARGENTINO
   SINERGIA
-  MOCK
+  OTRO
 }
 
-enum ShipmentStatus {
-  PENDING
-  CREATED
-  LABEL_READY
-  DISPATCHED
-  DELIVERED
-  ERROR
-  CANCELLED
+enum ShippingMode {
+  HOME
+  PICKUP_BRANCH
 }
 
 // ---------------------------------------------------------------
-// PDFs / etiquetas — separadas por si se reimprime o regenera.
+// Cada vez que se genera un Excel de carga masiva queda un registro acá.
 // ---------------------------------------------------------------
-model ShippingLabel {
-  id          String   @id @default(cuid())
-  shipmentId  String
-  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-
-  fileName    String
-  filePath    String
-  mimeType    String   @default("application/pdf")
-  sizeBytes   Int?
-
-  createdAt   DateTime @default(now())
-}
-
-// ---------------------------------------------------------------
-// Logs de llamadas externas (auditoría, debug, soporte)
-// ---------------------------------------------------------------
-model ApiLog {
+model Export {
   id          String   @id @default(cuid())
   userId      String?
   user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  provider    String   // tiendanube / correo_argentino / sinergia
-  endpoint    String
-  method      String
-  statusCode  Int?
-  // Cuerpos truncados / sin datos sensibles. Ver src/lib/logger.ts
-  requestBody String?  @db.Text
-  responseBody String? @db.Text
-  durationMs  Int?
-  success     Boolean  @default(false)
-  errorMessage String?
+  platform    Carrier                            // CORREO_ARGENTINO | SINERGIA
+  fileName    String
+  filePath    String
+  mimeType    String   @default("text/csv")
+  rowCount    Int
+  sizeBytes   Int?
 
   createdAt   DateTime @default(now())
 
-  @@index([provider, createdAt])
+  items       ExportItem[]
+}
+
+model ExportItem {
+  id        String @id @default(cuid())
+  exportId  String
+  export    Export @relation(fields: [exportId], references: [id], onDelete: Cascade)
+  orderId   String
+  order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([exportId, orderId])
 }

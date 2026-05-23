@@ -3,10 +3,13 @@
 import { useEffect, useState } from 'react';
 
 interface Settings {
-  defaultWeightKg: number;
+  defaultProductType: 'CP' | 'EP' | 'UP';
   defaultLengthCm: number;
   defaultWidthCm: number;
   defaultHeightCm: number;
+  defaultWeightKg: number;
+  defaultContentValue: number;
+  defaultFlexId: string;
   originName: string;
   originStreet: string;
   originNumber: string;
@@ -15,14 +18,16 @@ interface Settings {
   originPostalCode: string;
   originPhone: string;
   originEmail: string;
-  preferredCarrier: 'CORREO_ARGENTINO' | 'SINERGIA';
 }
 
 const empty: Settings = {
-  defaultWeightKg: 1,
+  defaultProductType: 'CP',
   defaultLengthCm: 20,
   defaultWidthCm: 15,
   defaultHeightCm: 10,
+  defaultWeightKg: 1,
+  defaultContentValue: 0,
+  defaultFlexId: 'flex',
   originName: '',
   originStreet: '',
   originNumber: '',
@@ -31,7 +36,6 @@ const empty: Settings = {
   originPostalCode: '',
   originPhone: '',
   originEmail: '',
-  preferredCarrier: 'CORREO_ARGENTINO',
 };
 
 export default function SettingsForm() {
@@ -43,10 +47,7 @@ export default function SettingsForm() {
     fetch('/api/settings')
       .then((r) => r.json())
       .then((json) => {
-        if (json?.store?.settings) {
-          const s = json.store.settings as Settings;
-          setData({ ...empty, ...s });
-        }
+        if (json?.settings) setData({ ...empty, ...(json.settings as Settings) });
         setLoading(false);
       });
   }, []);
@@ -64,22 +65,24 @@ export default function SettingsForm() {
 
   if (loading) return <p className="text-slate-500">Cargando…</p>;
 
-  const field = (
-    label: string,
-    key: keyof Settings,
-    type: 'text' | 'number' | 'email' = 'text',
-  ) => (
+  const text = (label: string, key: keyof Settings, placeholder?: string) => (
     <div>
-      <label className="block text-sm text-slate-600">{label}</label>
+      <label className="block text-xs text-slate-600">{label}</label>
       <input
-        type={type}
         value={String(data[key] ?? '')}
-        onChange={(e) =>
-          setData({
-            ...data,
-            [key]: type === 'number' ? Number(e.target.value) : e.target.value,
-          })
-        }
+        placeholder={placeholder}
+        onChange={(e) => setData({ ...data, [key]: e.target.value })}
+        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+      />
+    </div>
+  );
+  const num = (label: string, key: keyof Settings) => (
+    <div>
+      <label className="block text-xs text-slate-600">{label}</label>
+      <input
+        type="number"
+        value={String(data[key] ?? '')}
+        onChange={(e) => setData({ ...data, [key]: Number(e.target.value) })}
         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
       />
     </div>
@@ -89,44 +92,59 @@ export default function SettingsForm() {
     <div className="space-y-8">
       <section className="bg-white border rounded-2xl p-5 space-y-4">
         <h2 className="font-semibold">Paquete por defecto</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {field('Peso (kg)', 'defaultWeightKg', 'number')}
-          {field('Largo (cm)', 'defaultLengthCm', 'number')}
-          {field('Ancho (cm)', 'defaultWidthCm', 'number')}
-          {field('Alto (cm)', 'defaultHeightCm', 'number')}
-        </div>
-      </section>
-
-      <section className="bg-white border rounded-2xl p-5 space-y-4">
-        <h2 className="font-semibold">Dirección de origen / remitente</h2>
-        <div className="grid grid-cols-2 gap-3">
-          {field('Nombre', 'originName')}
-          {field('Email', 'originEmail', 'email')}
-          {field('Calle', 'originStreet')}
-          {field('Número', 'originNumber')}
-          {field('Ciudad', 'originCity')}
-          {field('Provincia', 'originProvince')}
-          {field('Código postal', 'originPostalCode')}
-          {field('Teléfono', 'originPhone')}
-        </div>
-      </section>
-
-      <section className="bg-white border rounded-2xl p-5 space-y-4">
-        <h2 className="font-semibold">Operador logístico preferido</h2>
-        <select
-          value={data.preferredCarrier}
-          onChange={(e) =>
-            setData({ ...data, preferredCarrier: e.target.value as Settings['preferredCarrier'] })
-          }
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-        >
-          <option value="CORREO_ARGENTINO">Correo Argentino</option>
-          <option value="SINERGIA">Sinergia</option>
-        </select>
         <p className="text-xs text-slate-500">
-          Las credenciales de cada operador se configuran en variables de entorno
-          (<code>.env</code>), no acá.
+          Se aplica a cada envío si la etiqueta no trae el dato. Podés sobreescribir por pedido en la tabla.
         </p>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs text-slate-600">Tipo producto (Correo Arg.)</label>
+            <select
+              value={data.defaultProductType}
+              onChange={(e) =>
+                setData({ ...data, defaultProductType: e.target.value as Settings['defaultProductType'] })
+              }
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="CP">CP — PAQ.AR Clásico</option>
+              <option value="EP">EP — PAQ.AR Expreso</option>
+              <option value="UP">UP — PAQ.AR Hoy</option>
+            </select>
+          </div>
+          {num('Largo (cm)', 'defaultLengthCm')}
+          {num('Ancho (cm)', 'defaultWidthCm')}
+          {num('Alto (cm)', 'defaultHeightCm')}
+          {num('Peso (kg)', 'defaultWeightKg')}
+          {num('Valor del contenido (ARS)', 'defaultContentValue')}
+        </div>
+      </section>
+
+      <section className="bg-white border rounded-2xl p-5 space-y-4">
+        <h2 className="font-semibold">Sinergia</h2>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          {text('ID FLEX por defecto', 'defaultFlexId', 'flex')}
+        </div>
+        <p className="text-xs text-slate-500">
+          La columna “ID FLEX” es obligatoria en el formulario de carga masiva de Sinergia. Si tus envíos
+          son FLEX basta con poner la palabra <code>flex</code>; podés editarlo por pedido en la tabla.
+        </p>
+      </section>
+
+      <section className="bg-white border rounded-2xl p-5 space-y-4">
+        <h2 className="font-semibold">Remitente (informativo)</h2>
+        <p className="text-xs text-slate-500">
+          Estos datos no se incluyen en el Excel de carga masiva (cada plataforma usa el remitente del contrato),
+          pero te sirven como referencia.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          {text('Nombre', 'originName')}
+          {text('Email', 'originEmail')}
+          {text('Calle', 'originStreet')}
+          {text('Número', 'originNumber')}
+          {text('Ciudad', 'originCity')}
+          {text('Provincia', 'originProvince')}
+          {text('Código postal', 'originPostalCode')}
+          {text('Teléfono', 'originPhone')}
+        </div>
       </section>
 
       <div className="flex items-center gap-3">

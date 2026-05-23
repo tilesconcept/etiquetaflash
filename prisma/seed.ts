@@ -1,10 +1,10 @@
-import { PrismaClient, Carrier } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  const adminEmail = process.env.ADMIN_EMAIL ?? 'admin@tilesconcept.com';
+  const adminEmail = process.env.ADMIN_EMAIL ?? 'admin@tilesconceptar.com';
   const adminPassword = process.env.ADMIN_PASSWORD ?? 'cambiame123';
 
   const passwordHash = await bcrypt.hash(adminPassword, 10);
@@ -20,35 +20,26 @@ async function main() {
     },
   });
 
-  // Tienda mock para poder operar sin OAuth en modo MOCK_MODE.
-  const store = await prisma.store.upsert({
-    where: { tiendaNubeId: 'mock-store' },
+  await prisma.settings.upsert({
+    where: { id: 'default' },
     update: {},
     create: {
-      tiendaNubeId: 'mock-store',
-      name: 'Tiles Concept (mock)',
-      accessTokenEnc: 'mock',
-    },
-  });
-
-  await prisma.storeSettings.upsert({
-    where: { storeId: store.id },
-    update: {},
-    create: {
-      storeId: store.id,
-      defaultWeightKg: 1.5,
+      id: 'default',
+      defaultProductType: 'CP',
       defaultLengthCm: 30,
       defaultWidthCm: 20,
       defaultHeightCm: 15,
+      defaultWeightKg: 1.5,
+      defaultContentValue: 0,
+      defaultFlexId: 'flex',
       originName: 'Tiles Concept',
-      originStreet: 'Av. Siempre Viva',
-      originNumber: '1234',
-      originCity: 'CABA',
-      originProvince: 'Ciudad Autónoma de Buenos Aires',
-      originPostalCode: '1414',
+      originStreet: 'Larrea',
+      originNumber: '1381',
+      originCity: 'CIUDAD AUTONOMA BUENOS AIRES',
+      originProvince: 'Buenos Aires',
+      originPostalCode: '1117',
       originPhone: '+5491100000000',
-      originEmail: 'envios@tilesconcept.com',
-      preferredCarrier: Carrier.CORREO_ARGENTINO,
+      originEmail: 'envios@tilesconceptar.com',
     },
   });
 

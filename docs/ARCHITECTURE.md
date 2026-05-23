@@ -1,112 +1,131 @@
 # Arquitectura — EtiquetaFlash
 
-## Vista general
+## Resumen
+
+App Next.js que recibe PDFs de etiquetas de Tienda Nube, los parsea, persiste
+los pedidos en Postgres y genera dos archivos descargables (CSV para Correo
+Argentino, XLSX para Sinergia) listos para subir a los formularios de carga
+masiva de cada plataforma.
+
+**No hay integraciones HTTP con carriers.** El usuario sube los Excel manualmente.
 
 ```
-Usuario interno
-     │
-     ▼
-[Next.js (UI + API Routes)]
-     │
-     ├──▶ TiendaNubeService ────▶ api.tiendanube.com (REST, Bearer)
-     │
-     ├──▶ ShippingProvider (interfaz)
-     │      ├── CorreoArgentinoService ────▶ Correo Argentino API (TODO)
-     │      └── SinergiaService ───────────▶ Sinergia API (TODO)
-     │
-     └──▶ Prisma ─────▶ PostgreSQL
-                            ├── User
-                            ├── Store + StoreSettings
-                            ├── Order (cache + raw JSON)
-                            ├── Shipment (raw req/res)
-                            ├── ShippingLabel (PDFs)
-                            └── ApiLog (auditoría sanitizada)
+        PDFs Tienda Nube
+              │
+              ▼
+┌─────────────────────────────┐
+│  POST /api/uploads          │
+│  ┌─────────────────────┐    │
+│  │  pdfParser.ts       │    │  unpdf + pdfjs (posiciones)
+│  │  (texto + layout)   │    │  → reconstruye líneas
+│  └──────────┬──────────┘    │
+│             ▼               │
+│  upsert Order (Prisma)      │
+└─────────────────────────────┘
+              │
+              ▼
+       Dashboard editable
+              │
+              ▼
+┌─────────────────────────────┐
+│  POST /api/exports/*        │
+│  ┌─────────────────────┐    │
+│  │  Correo Argentino   │    │  exporters/correoArgentinoExporter
+│  │  → CSV  ;  UTF-8 BOM│    │
+│  └─────────────────────┘    │
+│  ┌─────────────────────┐    │
+│  │  Sinergia           │    │  exporters/sinergiaExporter  (ExcelJS)
+│  │  → XLSX             │    │
+│  └─────────────────────┘    │
+└─────────────────────────────┘
+              │
+              ▼
+     Descarga al navegador
+              +
+     persist en storage/exports/
+     +
+     registro en `Export` (auditoría)
 ```
 
-## Decisiones clave
+## Decisiones
 
-### 1. Interfaz `ShippingProvider`
-Una sola interfaz (`createShipment`, `getLabel`, `getTracking`,
-`validateShipmentData`, `isConfigured`). El orquestador
-(`shipmentOrchestrator.ts`) y la UI no conocen carriers concretos. Sumar uno
-nuevo es escribir una clase que la implemente.
+### 1. Parser de PDF con posiciones (no texto plano)
 
-### 2. Mock mode top-level
-`MOCK_MODE=true` cortocircuita TiendaNubeService (datos hardcodeados) y
-CorreoArgentino/Sinergia (no llaman a red, generan PDF propio). Eso permite
-desarrollar end-to-end sin credenciales y mantiene exactamente el mismo
-camino de código que en producción (la diferencia es un `if` al inicio).
+`unpdf.extractText` aplana el contenido a una sola línea, pierde estructura.
+Usamos `getDocumentProxy(...).getPage(i).getTextContent()` (API de pdfjs) que
+devuelve items con `transform[4]` (X) y `transform[5]` (Y). Agrupamos por Y con
+tolerancia de 3px → reconstruimos líneas → ordenamos por X. El resultado se ve
+idéntico al `pdftotext -layout` de poppler, pero corre 100% en Node sin
+binarios nativos (sirve para Vercel).
 
-### 3. Cache de orders en DB
-Sincronizamos pedidos desde TN a `Order` en DB. Razones:
-- Permite filtrar/listar sin pegar contra TN cada vez.
-- Permite marcar `labelGenerated=true` y filtrar pendientes localmente.
-- Guarda el JSON crudo en `Order.raw` para auditoría / debugging.
+### 2. Una Order = una línea del Excel
 
-### 4. Etiquetas (PDF)
-Tres caminos:
-1. Si el carrier devuelve `labelPdfBytes` → guardamos eso.
-2. Si devuelve `labelUrl` → descargamos.
-3. Si no devuelve nada → generamos PDF propio con `pdf-lib` (10x15cm).
+Cada Order se mapea 1:1 con una fila del bulk. Los campos específicos de cada
+carrier (sucursal Correo, FLEX ID Sinergia) viven en el mismo modelo;
+los exporters eligen qué columnas usar.
 
-Se persisten en `storage/labels/` + se registran en `ShippingLabel`.
-**Producción**: migrar a S3/R2/Blob (`Shipment.labelUrl` ya lo soporta).
+### 3. Validación previa al export (dryRun)
 
-### 5. Cifrado de tokens
-`Store.accessTokenEnc` se guarda con AES-256-GCM (`src/lib/encryption.ts`).
-La clave está en `ENCRYPTION_KEY` (32 bytes hex). Si rota la clave, hay que
-hacer migración de tokens.
+Cada export recibe `dryRun: true` opcional. En vez de generar el archivo,
+devuelve la lista de issues por orden (`#397: falta email`). La UI usa esto
+para mostrar al usuario qué tiene que corregir antes de descargar.
 
-### 6. Logging
-`ApiLog` guarda toda llamada externa con request/response sanitizados
-(claves sensibles → `[REDACTED]`, strings largos truncados). Permite
-debugging y auditoría sin filtrar secretos.
+### 4. Inferencia automática
 
-### 7. Validación en dos capas
-- **Genérica** (`validators/orderValidator.ts`): aplica a cualquier carrier.
-- **Específica** del carrier (`validateShipmentData`): cada provider agrega
-  sus reglas (ej. CUIT obligatorio si Sinergia lo pide).
+- **Código de provincia Correo Argentino** (1 letra): se infiere primero del CPA
+  (`C1414AAA` → `C`), luego del nombre normalizado de la provincia. Si no se
+  puede, queda vacío y se marca como issue.
+- **Carrier**: detectado desde la línea `Correo Argentino …` / `Sinergia …`
+  del PDF. Editable por fila.
+- **Modo de envío**: `Dirección de retiro:` → PICKUP_BRANCH, `Dirección de envío:` → HOME.
+- **Celular**: el formato `+5491145678901` se separa en
+  `cod_area_cel` (`11`) + `cel` (`45678901`) — Correo lo pide separado.
 
-El orquestador corre primero la genérica; cada service corre la suya antes
-de cualquier fetch a la API externa.
+### 5. PICKUP_BRANCH solo aplica para Correo Argentino
 
-## Flujo de "Generar etiqueta"
+Sinergia no maneja retiro en sucursal (sólo domicilio). El validador de
+Sinergia rechaza órdenes marcadas como pickup; el usuario debe convertirlas
+a HOME (cargando una dirección) o exportarlas únicamente por Correo.
 
-```
-POST /api/shipments { orderInternalId, carrier }
-  │
-  ▼
-shipmentOrchestrator.generateLabel()
-  │
-  ├──▶ valida order (validateOrderForShipment)
-  ├──▶ arma payload (order + settings.origin + package)
-  ├──▶ persiste Shipment(status=PENDING)
-  ├──▶ resolveProvider(carrier).createShipment(payload)
-  │       └──▶ carrier API (o mock)
-  ├──▶ obtiene PDF (bytes | url | self-generated)
-  ├──▶ persiste PDF en storage/labels/
-  ├──▶ Shipment.update(status=LABEL_READY, tracking, labelPdfPath)
-  ├──▶ ShippingLabel.create
-  ├──▶ Order.update(labelGenerated=true)
-  └──▶ (opcional) TiendaNube.updateOrderTracking(...)
-```
+### 6. Persistencia de exports
 
-Errores en cualquier paso → `Shipment.status=ERROR` + `errorMessage`
-visible en `/shipments`.
+Cada export queda guardado:
+- En `storage/exports/` (filesystem)
+- Como fila en `Export` con `rowCount`, `sizeBytes`, `userId`, etc.
+- Con `ExportItem` linkeando a cada Order incluida.
 
-## Capa de datos
+Esto permite:
+- Re-descargar el mismo archivo (`/api/exports/{id}/download`).
+- Marcar Orders como `exported=true` (filtran del dashboard por default).
+- Auditoría: quién generó qué y cuándo.
+
+## Modelo de datos
 
 ```
-User (1) ─── (N) ApiLog
-Store (1) ─── (1) StoreSettings
-       (1) ─── (N) Order ── (N) Shipment ── (N) ShippingLabel
+User (1) ─── (N) Export
+                  │
+                  └─── (N) ExportItem ─── (N) Order
+
+Settings (singleton id="default")
+
+Order
+ ├── identidad: orderNumber + packageNumber (unique)
+ ├── source: PDF_UPLOAD | MANUAL | TIENDANUBE_API
+ ├── carrier: CORREO_ARGENTINO | SINERGIA | OTRO
+ ├── shippingMode: HOME | PICKUP_BRANCH
+ ├── destinatario / dirección / sucursal (todo editable)
+ ├── paquete (override sobre defaults de Settings)
+ ├── flexId / shipmentDetail (Sinergia)
+ ├── productsJson / productsSummary
+ ├── exported / lastExportId
+ └── pdfRawText (auditoría)
 ```
 
-## Decisiones diferidas / candidatos a refactor
+## Próximos pasos sugeridos
 
-- Job queue para `generateBatch` (hoy es `Promise.allSettled` inline). Con
-  volumen alto migrar a BullMQ / queue.
-- Webhook de Tienda Nube (`order/paid`) para auto-sincronizar.
-- Multi-tenant real: hoy hay una sola Store, el schema lo permite pero la
-  UI y `orderSync` toman la primera con `findFirst`.
-- Storage S3/R2 para PDFs.
+- Cargar las 4187 sucursales Correo Argentino y autocompletar `pickupBranchCode`
+  a partir del nombre detectado en el PDF.
+- Webhook de Tienda Nube para recibir nuevos pedidos automáticamente
+  (alternativa al upload manual).
+- Soporte multi-tenant (varias tiendas).
+- Mover storage de exports a S3/R2 para serverless.
