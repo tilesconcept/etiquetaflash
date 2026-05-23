@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { z } from 'zod';
-import fs from 'fs/promises';
-import path from 'path';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { toJsonError } from '@/lib/errors';
@@ -38,7 +36,6 @@ export async function POST(req: Request) {
     }
 
     const out = exportCorreoArgentino(orders, ctx);
-    const filePath = await persistFile(out.fileName, out.buffer);
 
     const userId = (session.user as { id?: string })?.id;
     const exp = await prisma.export.create({
@@ -46,7 +43,7 @@ export async function POST(req: Request) {
         userId: userId ?? null,
         platform: 'CORREO_ARGENTINO',
         fileName: out.fileName,
-        filePath,
+        filePath: 'inline',
         mimeType: out.mimeType,
         rowCount: out.rowCount,
         sizeBytes: out.buffer.byteLength,
@@ -71,12 +68,4 @@ export async function POST(req: Request) {
     const { status, body } = toJsonError(err);
     return NextResponse.json(body, { status });
   }
-}
-
-async function persistFile(fileName: string, buf: Buffer): Promise<string> {
-  const dir = path.join(process.cwd(), 'storage', 'exports');
-  await fs.mkdir(dir, { recursive: true });
-  const fp = path.join(dir, fileName);
-  await fs.writeFile(fp, buf);
-  return fp;
 }

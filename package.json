@@ -5,7 +5,7 @@
   "description": "App interna de Tiles Concept: subir PDFs de etiquetas de Tienda Nube y generar los Excel de carga masiva para Correo Argentino y Sinergia.",
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "prisma migrate deploy && prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
