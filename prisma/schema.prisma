@@ -1,0 +1,208 @@
+// EtiquetaFlash · esquema Prisma
+// Documentación: https://www.prisma.io/docs
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------
+// Usuarios internos de Tiles Concept (operadores que generan etiquetas)
+// ---------------------------------------------------------------
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  role         UserRole @default(OPERATOR)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apiLogs ApiLog[]
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+}
+
+// ---------------------------------------------------------------
+// Tienda conectada (un solo Tiles Concept, pero multi-tenant ready)
+// ---------------------------------------------------------------
+model Store {
+  id               String   @id @default(cuid())
+  tiendaNubeId     String   @unique
+  name             String
+  // Token cifrado (AES-256-GCM). Ver src/lib/encryption.ts
+  accessTokenEnc   String
+  scope            String?
+  connectedAt      DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  settings  StoreSettings?
+  orders    Order[]
+  shipments Shipment[]
+}
+
+// Configuración (paquete default, dirección origen, operador preferido, etc).
+model StoreSettings {
+  id                    String  @id @default(cuid())
+  storeId               String  @unique
+  store                 Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  defaultWeightKg       Float   @default(1.0)
+  defaultLengthCm       Float   @default(20)
+  defaultWidthCm        Float   @default(15)
+  defaultHeightCm       Float   @default(10)
+
+  originName            String  @default("Tiles Concept")
+  originStreet          String  @default("")
+  originNumber          String  @default("")
+  originCity            String  @default("")
+  originProvince        String  @default("")
+  originPostalCode      String  @default("")
+  originPhone           String  @default("")
+  originEmail           String  @default("")
+
+  preferredCarrier      Carrier @default(CORREO_ARGENTINO)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------
+// Cache de pedidos sincronizados desde Tienda Nube
+// ---------------------------------------------------------------
+model Order {
+  id                String   @id @default(cuid())
+  storeId           String
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  tiendaNubeOrderId String   @unique
+  orderNumber       String
+  status            String   // open / closed / cancelled
+  paymentStatus     String   // paid / pending / refunded
+  shippingStatus    String   // unpacked / packed / shipped / etc.
+  totalAmount       Float
+  currency          String   @default("ARS")
+
+  // Snapshot del JSON crudo recibido de Nuvemshop (auditoría).
+  raw               Json
+
+  // Campos planos para listar/filtrar sin parsear JSON.
+  customerName      String
+  customerEmail     String?
+  customerPhone     String?
+  customerDocument  String?
+
+  shipAddress       String?
+  shipNumber        String?
+  shipFloor         String?
+  shipCity          String?
+  shipProvince      String?
+  shipPostalCode    String?
+  shipCountry       String   @default("AR")
+
+  labelGenerated    Boolean  @default(false)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tiendaNubeCreatedAt DateTime?
+
+  shipments Shipment[]
+
+  @@index([storeId, shippingStatus])
+  @@index([labelGenerated])
+}
+
+// ---------------------------------------------------------------
+// Envío generado en un operador logístico
+// ---------------------------------------------------------------
+model Shipment {
+  id                  String   @id @default(cuid())
+  storeId             String
+  store               Store    @relation(fields: [storeId], references: [id])
+  orderId             String
+  order               Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  tiendaNubeOrderId   String
+
+  carrier             Carrier
+  status              ShipmentStatus @default(PENDING)
+  trackingNumber      String?
+  labelUrl            String?         // URL externa (si el carrier la provee)
+  labelPdfPath        String?         // ruta local del PDF descargado
+
+  // Payload completo del request/response al carrier (auditoría).
+  rawRequest          Json?
+  rawResponse         Json?
+  errorMessage        String?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  labels ShippingLabel[]
+
+  @@index([carrier, status])
+  @@index([tiendaNubeOrderId])
+}
+
+enum Carrier {
+  CORREO_ARGENTINO
+  SINERGIA
+  MOCK
+}
+
+enum ShipmentStatus {
+  PENDING
+  CREATED
+  LABEL_READY
+  DISPATCHED
+  DELIVERED
+  ERROR
+  CANCELLED
+}
+
+// ---------------------------------------------------------------
+// PDFs / etiquetas — separadas por si se reimprime o regenera.
+// ---------------------------------------------------------------
+model ShippingLabel {
+  id          String   @id @default(cuid())
+  shipmentId  String
+  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  fileName    String
+  filePath    String
+  mimeType    String   @default("application/pdf")
+  sizeBytes   Int?
+
+  createdAt   DateTime @default(now())
+}
+
+// ---------------------------------------------------------------
+// Logs de llamadas externas (auditoría, debug, soporte)
+// ---------------------------------------------------------------
+model ApiLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  provider    String   // tiendanube / correo_argentino / sinergia
+  endpoint    String
+  method      String
+  statusCode  Int?
+  // Cuerpos truncados / sin datos sensibles. Ver src/lib/logger.ts
+  requestBody String?  @db.Text
+  responseBody String? @db.Text
+  durationMs  Int?
+  success     Boolean  @default(false)
+  errorMessage String?
+
+  createdAt   DateTime @default(now())
+
+  @@index([provider, createdAt])
+}
